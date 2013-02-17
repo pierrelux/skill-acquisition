@@ -1,11 +1,43 @@
 #!/usr/bin/python
 
 import sys
+import pickle
 import random
 import argparse
+import itertools
 import numpy as np
 import igraph as ig
 from pyflann import *
+
+
+def lpa_aggregate(graph, nmerges=0):
+  # Find communities by weighted LPA
+  cl1 = graph.community_label_propagation("weight")
+  labels1 = cl1.membership
+  print 'Number of communities in solution 1: ', len(cl1)
+  print 'Modularity score: ', cl1.modularity
+
+  # Aggregate
+  for i in xrange(nmerges):
+    # Compute new clustering
+    cl2 = graph.community_label_propagation("weight")
+    labels2 = cl2.membership
+
+    print 'Number of communities in solution %d: %d'%(i+2, len(cl2))
+    print 'Modularity score: ', cl2.modularity
+
+    # Combine labels
+    unique_labels = list(set(itertools.izip(labels1, labels2)))
+    relabling = dict(itertools.izip(unique_labels, xrange(len(unique_labels))))
+    labels = [ relabling[l] for l in itertools.izip(labels1, labels2) ]
+
+    # Compute new solution
+    cl1 = graph.community_label_propagation(initial=labels);
+    print 'Number of communities in aggregate solution: ', len(cl1)
+    print 'Modularity score: ', cl1.modularity
+
+  return cl1
+
 
 # Parse arguments
 parser = argparse.ArgumentParser(description='Build the state-space graph and find community structures.')
@@ -37,11 +69,13 @@ graph.add_vertices(np.alen(dataset))
 graph.add_edges([(i, j) for i in xrange(np.alen(knn)) for j in knn[i,:]])
 graph.es["weight"] = [np.exp(-1*weight/args.sigma) for row in dists for weight in row]
 
-# Find communities by weighted LPA
-communities = graph.community_label_propagation("weight")
+# Compute communities
+cl = lpa_aggregate(graph)
+print 'Number of communities in aggregate solution: ', len(cl)
+print 'Modularity score: ', cl.modularity
 
-print 'Is graph connected ? ', graph.is_connected()
+print 'Graph connected ? ', graph.is_connected()
 
 # Plot with force layout
 if args.plot:
-  ig.plot(graph, "manifold.pdf", layout="fr")
+   ig.plot(cl, "manifold.pdf", layout="large")
