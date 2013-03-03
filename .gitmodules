@@ -1,3 +1,9 @@
 [submodule "external/flann"]
 	path = external/flann
 	url = git://github.com/mariusmuja/flann.git
+[submodule "external/python-igraph"]
+	path = external/python-igraph
+	url = git@github.com:pierrelux/python-igraph.git
+[submodule "external/igraph"]
+	path = external/igraph
+	url = git@github.com:pierrelux/igraph.git
