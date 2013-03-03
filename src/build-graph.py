@@ -8,6 +8,7 @@ import itertools
 import numpy as np
 import igraph as ig
 from pyflann import *
+from scipy.cluster.vq import *
 
 
 def lpa_aggregate(graph, nmerges=0):
@@ -38,6 +39,32 @@ def lpa_aggregate(graph, nmerges=0):
 
   return cl1
 
+def spectral_clustering(graph, k):
+    # Compute the normalized Laplacian
+    print 'Computing Laplacian...'
+    laplacian = graph.laplacian(weights="weight", normalized=True)
+
+    # Compute the Eigenvectors
+    print 'Computing Eigenvectors...'
+    w, v = np.linalg.eig(laplacian)
+
+    # Apply K-Means
+    print 'Applying K-Means...'
+    kmeans(v[:, 0:k], k)
+
+def compare(graph):
+  print '\nLPA Method: '
+  cl = lpa_aggregate(graph)
+
+  print '\nInfomap method: '
+  cl = graph.community_infomap(edge_weights="weight")
+  print 'Number of communities: ', len(cl)
+  print 'Modularity score: ', cl.modularity
+
+  print '\nWalktrap method: '
+  cl = graph.community_walktrap(weights="weight").as_clustering()
+  print 'Number of communities: ', len(cl)
+  print 'Modularity score: ', cl.modularity
 
 # Parse arguments
 parser = argparse.ArgumentParser(description='Build the state-space graph and find community structures.')
@@ -70,11 +97,11 @@ graph.add_edges([(i, j) for i in xrange(np.alen(knn)) for j in knn[i,:]])
 graph.es["weight"] = [np.exp(-1*weight/args.sigma) for row in dists for weight in row]
 
 # Compute communities
-cl = lpa_aggregate(graph)
-print 'Number of communities in aggregate solution: ', len(cl)
-print 'Modularity score: ', cl.modularity
-
 print 'Graph connected ? ', graph.is_connected()
+
+#spectral_clustering(graph, 30)
+compare(graph)
+#graph.save("manifold.net", format="ncol")
 
 # Plot with force layout
 if args.plot:
