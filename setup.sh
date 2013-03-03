@@ -38,3 +38,5 @@ python setup.py build
 python setup.py install
 
 cd ../../
+deactivate
+unset LD_LIBRARY_PATH
