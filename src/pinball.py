@@ -42,7 +42,7 @@ class PinballObstacle:
         self.min_x = min(self.points, key=lambda pt: pt[0])[0]
         self.max_x = max(self.points, key=lambda pt: pt[0])[0]
         self.min_y = min(self.points, key=lambda pt: pt[1])[1]
-        self.max_y = min(self.points, key=lambda pt: pt[1])[1]
+        self.max_y = max(self.points, key=lambda pt: pt[1])[1]
 
         self._double_collision = False
         self._intercept = None
@@ -73,7 +73,7 @@ class PinballObstacle:
                     self._double_collision = True
                 else:
                     self._intercept = pt_pair
-                    self.intercept_found = True
+                    intercept_found = True
 
         return intercept_found
 
@@ -87,23 +87,26 @@ class PinballObstacle:
             return [-ball.xdot, -ball.ydot]
 
         # Normalize direction
-        if self._intercept[0] < 0:
-            self._intercept[:] = self._intercept*-1
+        obstacle_vector = self._intercept[1] - self._intercept[0]
+        if obstacle_vector[0] < 0:
+            obstacle_vector = self._intercept[0] - self.intercept[1]
 
-        angle = self._angle(self._intercept[:], [ball.xdot, ball.ydot])
-        angle -= np.pi
+        velocity_vector = np.array([ball.xdot, ball.ydot])
+        theta = self._angle(velocity_vector, obstacle_vector) - np.pi
+        if theta < 0:
+            theta += 2*np.pi
 
-        intercept_theta = self._angle([-1, 0], self._intercept)
-        angle += intercept_theta
+        intercept_theta = self._angle([-1, 0], obstacle_vector)
+        theta += intercept_theta
 
-        if angle > 2*np.pi:
-            angle -= 2*np.pi
+        if theta > 2*np.pi:
+            theta -= 2*np.pi
 
-        ball_velocity = np.linalg.norm([ball.xdot, ball.ydot])
-        return [ball_velocity*np.cos(angle), ball_velocity*np.sin(angle)]
+        velocity = np.linalg.norm([ball.xdot, ball.ydot])
+        print 'velocity ', velocity
+        print 'theta ', theta
 
-    def _angle(self, v1, v2):
-        return np.arccos(v1.dot(v2)/(np.linalg.norm(v1)*np.linalg.norm(v2)))
+        return [velocity*np.cos(theta), velocity*np.sin(theta)]
 
     def _select_edge(self, edge1, edge2, ball):
         """
@@ -123,35 +126,43 @@ class PinballObstacle:
             return edge1
         return edge2
 
+    def _angle(self, v1, v2):
+        angle_diff = np.arctan2(v1[0], v1[1]) - np.arctan2(v2[0], v2[1])
+        if angle_diff < 0:
+            angle_diff += 2*np.pi
+        return angle_diff
+
     def _intercept_edge(self, pt_pair, ball):
         """
         @return True if the ball has hit an edge of the polygon
         """
         # Find the projection on an edge
-        direction = pt_pair[1] - pt_pair[0]
-        difference = pt_pair[1] - ball.position
+        obstacle_edge = pt_pair[1] - pt_pair[0]
+        difference = np.array(ball.position) - pt_pair[0]
 
-        scalar_proj = difference.dot(direction)/difference.dot(difference)
+        scalar_proj = difference.dot(obstacle_edge)/obstacle_edge.dot(obstacle_edge)
         if scalar_proj > 1.0:
             scalar_proj = 1.0
         elif scalar_proj < 0.0:
             scalar_proj = 0.0
 
         # Compute the distance to the closest point
-        closest_pt = pt_pair[1] + direction*scalar_proj
+        closest_pt = pt_pair[0] + obstacle_edge*scalar_proj
         obstacle_to_ball = ball.position - closest_pt
         distance = obstacle_to_ball.dot(obstacle_to_ball)
 
-        if distance < ball.radius*ball.radius:
+        if distance <= ball.radius*ball.radius:
             # A collision only if the ball is not already moving away
-            ball_to_obstacle  = closest_pt - ball.position
             velocity = np.array([ball.xdot, ball.ydot])
-            angle = self._angle(velocity, ball_to_obstacle)
+            ball_to_obstacle  = closest_pt - ball.position
+
+            angle = self._angle(ball_to_obstacle, velocity)
             if angle > np.pi:
                 angle = 2*np.pi - angle
 
             if angle > np.pi/1.99:
                 return False
+
             return True
         else:
             return False
@@ -215,7 +226,9 @@ class PinballModel:
 
             for obs in self.obstacles:
                 if obs.collision(self.ball):
-                    dxdy += obs.collision_effect(ball)
+                    print '******* COLLISION *************'
+                    dxdy = dxdy + obs.collision_effect(self.ball)
+                    print 'dxdy ', dxdy
                     ncollision += 1
 
             if ncollision == 1:
@@ -295,7 +308,7 @@ def run_game():
     environment = PinballModel(args.configuration)
     environment_view = PinballView(screen, environment)
 
-    actions = {pygame.K_RIGHT:PinballModel.ACC_X, pygame.K_UP:PinballModel.ACC_Y, pygame.K_LEFT:PinballModel.DEC_X, pygame.K_DOWN:PinballModel.DEC_Y}
+    actions = {pygame.K_RIGHT:PinballModel.ACC_X, pygame.K_UP:PinballModel.DEC_Y, pygame.K_LEFT:PinballModel.DEC_X, pygame.K_DOWN:PinballModel.ACC_Y}
 
     done = False
     while not done:
