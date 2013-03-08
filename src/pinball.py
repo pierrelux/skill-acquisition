@@ -7,6 +7,8 @@ import numpy as np
 from itertools import *
 
 class BallModel:
+    DRAG = 0.995
+
     def __init__(self, start_position, radius):
         self.position = start_position
         self.radius = radius
@@ -18,6 +20,10 @@ class BallModel:
         self.ydot += delta_ydot/5.0
         self.__clip(self.xdot)
         self.__clip(self.ydot)
+
+    def add_drag(self):
+        self.xdot *= self.DRAG
+        self.ydot *= self.DRAG
 
     def step(self):
         self.position[0] += self.xdot*self.radius/20.0
@@ -41,7 +47,7 @@ class PinballObstacle:
         self._double_collision = False
         self._intercept = None
 
-    def collide_with(self, ball):
+    def collision(self, ball):
         """
         Determine if the ball hits this obstacle
         """
@@ -56,7 +62,7 @@ class PinballObstacle:
         if ball.position[1] + ball.radius < self.min_y:
             return False
 
-        a, b = tee(np.array(points))
+        a, b = tee(np.array(self.points))
         next(b, None)
         intercept_found = False
         for pt_pair in izip(a, b):
@@ -65,7 +71,7 @@ class PinballObstacle:
                     # Ball has hit a corner
                     self._intercept = self._select_edge(pt_pair, intercept, ball)
                     self._double_collision = True
-                else
+                else:
                     self._intercept = pt_pair
                     self.intercept_found = True
 
@@ -74,7 +80,7 @@ class PinballObstacle:
     def collision_effect(self, ball):
         """
         Based of the collision detection result triggered
-        in L{PinballObstacle.collide_with()}, compute the
+        in L{PinballObstacle.collision()}, compute the
         change in velocity.
         """
         if self._double_collision:
@@ -139,35 +145,37 @@ class PinballObstacle:
         if distance < ball.radius*ball.radius:
             # A collision only if the ball is not already moving away
             ball_to_obstacle  = closest_pt - ball.position
-            velocity = np.array(ball.xdot, ball.ydot)
+            velocity = np.array([ball.xdot, ball.ydot])
             angle = self._angle(velocity, ball_to_obstacle)
             if angle > np.pi:
                 angle = 2*np.pi - angle
 
-            if angle > np.pi/1.99
+            if angle > np.pi/1.99:
                 return False
             return True
-        else
+        else:
             return False
 
 
 class PinballModel:
+    ACC_X = 0
+    ACC_Y = 1
+    DEC_X = 2
+    DEC_Y = 3
+    ACC_NONE = 4
+
+    STEP_PENALTY = -1
+    THRUST_PENALTY = -5
+    END_EPISODE = 10000
+
     def __init__(self, configuration):
         """
         Read a configuration file for Pinball and draw the domain to screen
         @param configuration: a configuration file containing the polygons,
         source and target locations.
         """
-        self.ACC_X = 0
-        self.ACC_Y = 1
-        self.DEC_X = 2
-        self.DEC_Y = 3
-        self.ACC_NONE = 4
         self.action_effects = {self.ACC_X:(1, 0), self.ACC_Y:(0, 1), self.DEC_X:(-1, 0), self.DEC_Y:(0, -1), self.ACC_NONE:(0, 0)}
 
-        self.STEP_PENALTY = -1
-        self.THRUST_PENALTY = -5
-        self.END_EPISODE = 1000
 
         # Set up the environment according to the configuration
         self.obstacles = []
@@ -202,10 +210,46 @@ class PinballModel:
             self.ball.step()
 
             # Detect collisions
-            #for obs in self.obstacles:
+            ncollision = 0
+            dxdy = np.array([0, 0])
 
-    def update(self):
-        pass
+            for obs in self.obstacles:
+                if obs.collision(self.ball):
+                    dxdy += obs.collision_effect(ball)
+                    ncollision += 1
+
+            if ncollision == 1:
+                self.ball.xdot = dxdy[0]
+                self.ball.ydot = dxdy[1]
+                if i == 19:
+                    self.ball.step()
+            elif ncollision > 1:
+                self.ball.xdot = -self.ball.xdot
+                self.ball.ydot = -self.ball.ydot
+
+            if self.episode_ended():
+                return self.END_EPISODE
+
+        self.ball.add_drag()
+        self._check_bounds()
+
+        if action == self.ACC_NONE:
+            return self.STEP_PENALTY
+
+        return self.THRUST_PENALTY
+
+    def episode_ended(self):
+        return np.linalg.norm(np.array(self.ball.position)-np.array(self.target_pos)) < self.target_rad
+
+    def _check_bounds(self):
+        if self.ball.position[0] > 1.0:
+            self.ball.position[0] = 0.95
+        if self.ball.position[0] < 0.0:
+            self.ball.position[0] = 0.05
+        if self.ball.position[1] > 1.0:
+            self.ball.position[1] = 0.95
+        if self.ball.position[1] < 0.0:
+            self.ball.position[1] = 0.05
 
 
 class PinballView:
@@ -251,15 +295,21 @@ def run_game():
     environment = PinballModel(args.configuration)
     environment_view = PinballView(screen, environment)
 
+    actions = {pygame.K_RIGHT:PinballModel.ACC_X, pygame.K_UP:PinballModel.ACC_Y, pygame.K_LEFT:PinballModel.DEC_X, pygame.K_DOWN:PinballModel.DEC_Y}
+
     done = False
     while not done:
         pygame.time.wait(100)
 
+        user_action = PinballModel.ACC_NONE
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 done = True
+            if event.type == pygame.KEYUP or event.type == pygame.KEYDOWN:
+                user_action = actions.get(event.key, PinballModel.ACC_NONE)
 
-        environment.update()
+        environment.take_action(user_action)
         environment_view.blit()
 
         pygame.display.flip()
