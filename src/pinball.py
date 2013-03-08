@@ -62,14 +62,14 @@ class PinballObstacle:
         if ball.position[1] + ball.radius < self.min_y:
             return False
 
-        a, b = tee(np.array(self.points))
+        a, b = tee(np.vstack([np.array(self.points), self.points[0]]))
         next(b, None)
         intercept_found = False
         for pt_pair in izip(a, b):
             if self._intercept_edge(pt_pair, ball):
                 if intercept_found:
                     # Ball has hit a corner
-                    self._intercept = self._select_edge(pt_pair, intercept, ball)
+                    self._intercept = self._select_edge(pt_pair, self._intercept, ball)
                     self._double_collision = True
                 else:
                     self._intercept = pt_pair
@@ -89,7 +89,7 @@ class PinballObstacle:
         # Normalize direction
         obstacle_vector = self._intercept[1] - self._intercept[0]
         if obstacle_vector[0] < 0:
-            obstacle_vector = self._intercept[0] - self.intercept[1]
+            obstacle_vector = self._intercept[0] - self._intercept[1]
 
         velocity_vector = np.array([ball.xdot, ball.ydot])
         theta = self._angle(velocity_vector, obstacle_vector) - np.pi
@@ -103,28 +103,29 @@ class PinballObstacle:
             theta -= 2*np.pi
 
         velocity = np.linalg.norm([ball.xdot, ball.ydot])
-        print 'velocity ', velocity
-        print 'theta ', theta
 
         return [velocity*np.cos(theta), velocity*np.sin(theta)]
 
-    def _select_edge(self, edge1, edge2, ball):
+    def _select_edge(self, intersect1, intersect2, ball):
         """
         If the ball hits a corner, select one of two edges.
         @return the edge with the smallest angle with the velocity vector
         """
-        velocity = np.array(ball.xdot, ball.ydot)
-        angle1 = self._angle(velocity, edge1)
-        angle2 = self._angle(velocity, edge2)
+        velocity = np.array([ball.xdot, ball.ydot])
+        obstacle_vector1 = intersect1[1] - intersect1[0]
+        obstacle_vector2 = intersect2[1] - intersect2[0]
 
+        angle1 = self._angle(velocity, obstacle_vector1)
         if angle1 > np.pi:
             angle1 -= np.pi
+
+        angle2 = self._angle(velocity, obstacle_vector2)
         if angle1 > np.pi:
             angle2 -= np.pi
 
         if np.abs(angle1 - (np.pi/2.0)) < np.abs(angle2 - (np.pi/2.0)):
-            return edge1
-        return edge2
+            return intersect1
+        return intersect2
 
     def _angle(self, v1, v2):
         angle_diff = np.arctan2(v1[0], v1[1]) - np.arctan2(v2[0], v2[1])
@@ -218,6 +219,7 @@ class PinballModel:
         for i in xrange(20):
             if i == 0:
                 self.ball.add_impulse(*self.action_effects[action])
+
             self.ball.step()
 
             # Detect collisions
@@ -226,9 +228,7 @@ class PinballModel:
 
             for obs in self.obstacles:
                 if obs.collision(self.ball):
-                    print '******* COLLISION *************'
                     dxdy = dxdy + obs.collision_effect(self.ball)
-                    print 'dxdy ', dxdy
                     ncollision += 1
 
             if ncollision == 1:
@@ -303,6 +303,7 @@ def run_game():
     args = parser.parse_args()
 
     pygame.init()
+    pygame.display.set_caption('Pinball Domain')
     screen = pygame.display.set_mode([args.width, args.height])
 
     environment = PinballModel(args.configuration)
@@ -312,7 +313,7 @@ def run_game():
 
     done = False
     while not done:
-        pygame.time.wait(100)
+        pygame.time.wait(50)
 
         user_action = PinballModel.ACC_NONE
 
