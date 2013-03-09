@@ -282,7 +282,7 @@ class PinballView:
             pygame.draw.polygon(self.background_surface, self.DARK_GRAY, map(self.__to_pixels, obs.points), 0)
 
         pygame.draw.circle(
-            screen, self.TARGET_COLOR, self.__to_pixels(self.model.target_pos), int(self.model.target_rad*self.screen.get_width()))
+            self.background_surface, self.TARGET_COLOR, self.__to_pixels(self.model.target_pos), int(self.model.target_rad*self.screen.get_width()))
 
     def __to_pixels(self, pt):
          return [int(pt[0] * self.screen.get_width()), int(pt[1] * self.screen.get_height())]
@@ -323,7 +323,9 @@ def run_game():
             if event.type == pygame.KEYUP or event.type == pygame.KEYDOWN:
                 user_action = actions.get(event.key, PinballModel.ACC_NONE)
 
-        environment.take_action(user_action)
+	if environment.take_action(user_action) == environment.END_EPISODE:
+	    done = True
+
         environment_view.blit()
 
         pygame.display.flip()
