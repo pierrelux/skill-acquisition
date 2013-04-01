@@ -1,17 +1,21 @@
 #!/usr/bin/python
-
 import os
+import sys
 import csv
 import copy
 import cPickle
 import random
 import argparse
+import multiprocessing
+import multiprocessing.managers
+
 from options import *
 from pyflann import *
 from pyrl.agents.sarsa_lambda import sarsa_lambda
 from pyrl.rlglue import RLGlueLocal as RLGlueLocal
 from pyrl.environments.pinball import PinballRLGlue
 from rlglue.environment.Environment import Environment
+
 
 class PseudoRewardEnvironment(Environment):
     """ This class is a decorator for an RL-Glue environment.
@@ -23,7 +27,7 @@ class PseudoRewardEnvironment(Environment):
     """
     END_EPISODE = 10000
 
-    def __init__(self, decorated, target, membership, kdtree):
+    def __init__(self, decorated, target, manager):
 	"""
 	:param decorated: The base environment
 	:type decorated: Environment
@@ -37,8 +41,7 @@ class PseudoRewardEnvironment(Environment):
 	"""
 	self.decorated = decorated
 	self.target_community = target
-	self.membership = membership
-	self.kdtree = kdtree
+	self.manager = manager
 
     def episode_ended(self, observation):
         """ Check if the agent has reached the target region
@@ -47,8 +50,8 @@ class PseudoRewardEnvironment(Environment):
 	:rtype: bool
 
 	"""
-        knn_idx, dist = self.kdtree.nn_index(np.array([observation]))
-        return self.membership[knn_idx] == self.target_community
+        knn_idx, dist = self.manager.nn_index(np.array([observation]))._getvalue()
+        return self.manager.membership(knn_idx)._getvalue() == self.target_community
 
     def env_step(self, action):
 	returnRO = self.decorated.env_step(action)
@@ -70,6 +73,77 @@ class PseudoRewardEnvironment(Environment):
     def env_message(self, message):
 	return self.decorated.env_message(message)
 
+def learn_option(option):
+    print 'Learning option from %d to %d'%(option.source_community, option.target_community)
+    sys.stdout.flush()
+
+    class IndexManager(multiprocessing.managers.BaseManager): pass
+    IndexManager.register('nn_index')
+    IndexManager.register('membership')
+    IndexManager.register('random_node')
+    IndexManager.register('nepisodes')
+    IndexManager.register('max_steps')
+    IndexManager.register('prefix')
+    manager = IndexManager(address=('', 8081), authkey='dist')
+    manager.connect()
+
+    nepisodes = int(manager.nepisodes()._getvalue())
+    max_steps = int(manager.max_steps()._getvalue())
+    prefix = str(manager.prefix()._getvalue())
+
+    agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=1.0, lmbda=0.9,
+    params={'name':'fourier', 'order':4})
+
+    environment = PseudoRewardEnvironment(PinballRLGlue('pinball_hard_single.cfg'),
+    option.target_community, manager)
+
+    # Connect to RL-Glue
+    print 'Creating a local RL-Glue binding...'
+    sys.stdout.flush()
+
+    rlglue = RLGlueLocal.LocalGlue(environment, agent)
+    rlglue.RL_init()
+
+    # Execute episodes
+    print 'Opening scores files...'
+    sys.stdout.flush()
+
+    score_file = csv.writer(open(prefix + '-score.csv', 'wb'))
+
+    print 'Scores files opened'
+    sys.stdout.flush()
+
+    for i in xrange(nepisodes):
+        # Use all of the nodes in the source community as possible
+        # initial positions. Selected at random in each episode
+        #start_position = dataset[random.choice(community)][:2]
+	start_position = manager.random_node(option.source_community)._getvalue()[:2]
+	print 'Got random position at ', start_position
+        sys.stdout.flush()
+
+        rlglue.RL_env_message('set-start-state %f %f'%(start_position[0], start_position[1]))
+        print '\tEpsiode %d of %d starting at %f, %f'%(i, nepisodes, start_position[0], start_position[1])
+        sys.stdout.flush()
+
+        terminated = rlglue.RL_episode(max_steps)
+
+        total_steps = rlglue.RL_num_steps()
+        total_reward = rlglue.RL_return()
+        print '\t\t %d steps, %d reward, %d terminated'%(total_steps, total_reward, terminated)
+        sys.stdout.flush()
+
+        score_file.writerow([i, total_steps, total_reward, terminated])
+
+    option.weights = agent.weights.copy()
+    option.basis = copy.deepcopy(agent.basis)
+    rlglue.RL_cleanup()
+
+    #cPickle.dump(options, open(prefix + '-options.pl', 'wb'))
+    print "Returning option"
+    sys.stdout.flush()
+
+    return option
+
 def learn_options(dataset, index, cl, num_episodes, max_steps, prefix):
     """ From the graph clustering step, learn options to navigate between adjacent communities.
 
@@ -88,50 +162,33 @@ def learn_options(dataset, index, cl, num_episodes, max_steps, prefix):
     """
 
     # Find the neighboring communities
-    options_connectivity = set(((cl.membership[v1], cl.membership[v2]) for v1, v2 in cl.graph.get_edgelist()
-                               if cl.membership[v1] != cl.membership[v2]))
+    options_connectivity = set(((cl.membership[v1], cl.membership[v2]) for v1, v2 in cl.graph.get_edgelist() if cl.membership[v1] != cl.membership[v2]))
+
     # Make options
     options = [Option(source, target) for source, target in options_connectivity]
     print len(options_connectivity), ' options found'
 
-    # Learn options
-    for option in options:
-	print 'Learning option from %d to %d'%(option.source_community, option.target_community)
+    # Expose the kd-tree over network
+    class IndexManager(multiprocessing.managers.BaseManager): pass
+    IndexManager.register('nn_index', callable=lambda pts: index.nn_index(pts))
+    IndexManager.register('membership', callable=lambda n: cl.membership[n])
+    IndexManager.register('random_node', callable=lambda c: dataset[random.choice(cl[c])])
+    IndexManager.register('nepisodes', callable=lambda: num_episodes)
+    IndexManager.register('max_steps', callable=lambda: max_steps)
+    IndexManager.register('prefix', callable=lambda: prefix)
 
-	agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=1.0, lmbda=0.9,
-			params={'name':'fourier', 'order':4})
+    manager = IndexManager(address=('', 8081), authkey='dist')
+    print 'Starting manager...'
+    manager.start()
 
-	environment = PseudoRewardEnvironment(PinballRLGlue('pinball_hard_single.cfg'),
-			option.target_community, cl.membership, index)
-
-        # Connect to RL-Glue
-        rlglue = RLGlueLocal.LocalGlue(environment, agent)
-	rlglue.RL_init()
-
-        # Execute episodes
-        score_file = csv.writer(open(prefix + '-score.csv', 'wb'))
-
-	for i in xrange(num_episodes):
-	    # Use all of the nodes in the source community as possible
-            # initial positions. Selected at random in each episode
-	    start_position = dataset[random.choice(cl[option.source_community])][:2]
-	    rlglue.RL_env_message('set-start-state %f %f'%(start_position[0], start_position[1]))
-
-	    print '\tEpsiode %d of %d starting at %f, %f'%(i, num_episodes, start_position[0], start_position[1])
-            terminated = rlglue.RL_episode(max_steps)
-
-	    total_steps = rlglue.RL_num_steps()
-            total_reward = rlglue.RL_return()
-	    print '\t\t %d steps, %d reward, %d terminated'%(total_steps, total_reward, terminated)
-
-            score_file.writerow([i, total_steps, total_reward, terminated])
-
-	option.weights = agent.weights.copy()
-	option.basis = copy.deepcopy(agent.basis)
-	rlglue.RL_cleanup()
-
-    # Serialize options
-    cPickle.dump(options, open(prefix + '-options.pl', 'wb'))
+    print 'Creating process pool...'
+    pool = multiprocessing.Pool()
+    print 'Parallel map...'
+    options = pool.map(learn_option, options)
+    print 'Joining...'
+    pool.join()
+    print 'Shudown...'
+    manager.shutdown()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Create options from the\
@@ -173,3 +230,4 @@ if __name__ == "__main__":
 
     # Create and learn options
     learn_options(dataset, flann, cl, args.nepisodes, args.max_steps, args.prefix)
+
