@@ -3,9 +3,11 @@
 import os
 import csv
 import copy
-import cPickle
 import random
+import cPickle
 import argparse
+import itertools
+
 from options import *
 from pyflann import *
 from pyrl.agents.sarsa_lambda import sarsa_lambda
@@ -24,39 +26,41 @@ class PseudoRewardEnvironment(Environment):
     END_EPISODE = 10000
 
     def __init__(self, decorated, target, membership, kdtree):
-	"""
-	:param decorated: The base environment
-	:type decorated: Environment
-	:param target: The target community to reach
-	:type target: int
-	:param membership: A vector of the community membership for each node
-	:type membership: list
-	:param kdtree: A KD-Tree index
-	:type kdtree: FLANN
+        """
+        :param decorated: The base environment
+        :type decorated: Environment
+        :param target: The target community to reach
+        :type target: int
+        :param membership: A vector of the community membership for each node
+        :type membership: list
+        :param kdtree: A KD-Tree index
+        :type kdtree: FLANN
 
-	"""
-	self.decorated = decorated
-	self.target_community = target
-	self.membership = membership
-	self.kdtree = kdtree
+        """
+        self.decorated = decorated
+        self.target_community = target
+        self.membership = membership
+        self.kdtree = kdtree
 
     def episode_ended(self, observation):
         """ Check if the agent has reached the target region
 
-	:returns: True if the nearest neighbor is in the target community
-	:rtype: bool
+        :returns: True if the nearest neighbor is in the target community
+        :rtype: bool
 
-	"""
+        """
         knn_idx, dist = self.kdtree.nn_index(np.array([observation]))
         return self.membership[knn_idx] == self.target_community
 
     def env_step(self, action):
-	returnRO = self.decorated.env_step(action)
-	returnRO.terminal = self.episode_ended(returnRO.o.doubleArray)
-	if returnRO.terminal:
-	    returnRO.r = self.END_EPISODE
+        returnRO = self.decorated.env_step(action)
 
-	return returnRO
+        # Set pseudo-termination
+        if self.episode_ended(returnRO.o.doubleArray):
+            returnRO.r = self.END_EPISODE
+            returnRO.terminal = True
+
+        return returnRO
 
     def env_init(self):
 	return self.decorated.env_init()
@@ -88,47 +92,53 @@ def learn_options(dataset, index, cl, num_episodes, max_steps, prefix):
     """
 
     # Find the neighboring communities
-    options_connectivity = set(((cl.membership[v1], cl.membership[v2]) for v1, v2 in cl.graph.get_edgelist()
-                               if cl.membership[v1] != cl.membership[v2]))
+    options_connectivity = set(((cl.membership[v1], cl.membership[v2]) for v1, v2 in cl.graph.get_edgelist() if cl.membership[v1] != cl.membership[v2]))
+
     # Make options
     options = [Option(source, target) for source, target in options_connectivity]
     print len(options_connectivity), ' options found'
 
     # Learn options
-    for option in options:
-	print 'Learning option from %d to %d'%(option.source_community, option.target_community)
+    for option, idx in itertools.izip(options, count()):
+        print 'Learning option %d of %d from %d to %d'%(idx, len(options), option.source_community, option.target_community)
 
-	agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=1.0, lmbda=0.9,
-			params={'name':'fourier', 'order':4})
+        agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=1.0, lmbda=0.9,
+        params={'name':'fourier', 'order':4})
 
-	environment = PseudoRewardEnvironment(PinballRLGlue('pinball_hard_single.cfg'),
-			option.target_community, cl.membership, index)
+        environment = PseudoRewardEnvironment(PinballRLGlue('pinball_hard_single.cfg'),
+        option.target_community, cl.membership, index)
 
         # Connect to RL-Glue
         rlglue = RLGlueLocal.LocalGlue(environment, agent)
-	rlglue.RL_init()
+        rlglue.RL_init()
 
         # Execute episodes
         score_file = csv.writer(open(prefix + '-score.csv', 'wb'))
 
-	for i in xrange(num_episodes):
-	    # Use all of the nodes in the source community as possible
-            # initial positions. Selected at random in each episode
-	    start_position = dataset[random.choice(cl[option.source_community])][:2]
-	    rlglue.RL_env_message('set-start-state %f %f'%(start_position[0], start_position[1]))
+        start_position = dataset[random.choice(cl[option.source_community])][:2]
+        random_init = False
 
-	    print '\tEpsiode %d of %d starting at %f, %f'%(i, num_episodes, start_position[0], start_position[1])
+        for i in xrange(num_episodes):
+            # Use all of the nodes in the source community as possible
+            # initial positions. Selected at random in each episode
+            if random_init:
+                start_position = dataset[random.choice(cl[option.source_community])][:2]
+
+            rlglue.RL_env_message('set-start-state %f %f'%(start_position[0], start_position[1]))
+
+            print '\tEpsiode %d of %d starting at %f, %f'%(i, num_episodes, start_position[0], start_position[1])
             terminated = rlglue.RL_episode(max_steps)
 
-	    total_steps = rlglue.RL_num_steps()
+            total_steps = rlglue.RL_num_steps()
             total_reward = rlglue.RL_return()
-	    print '\t\t %d steps, %d reward, %d terminated'%(total_steps, total_reward, terminated)
+            print '\t\t %d steps, %d reward, %d terminated'%(total_steps, total_reward, terminated)
 
             score_file.writerow([i, total_steps, total_reward, terminated])
 
-	option.weights = agent.weights.copy()
-	option.basis = copy.deepcopy(agent.basis)
-	rlglue.RL_cleanup()
+        option.weights = agent.weights.copy()
+        option.basis = copy.deepcopy(agent.basis)
+        rlglue.RL_cleanup()
+        cPickle.dump(option, open(prefix + '-option' + str(idx) + '.pl', 'wb'))
 
     # Serialize options
     cPickle.dump(options, open(prefix + '-options.pl', 'wb'))
