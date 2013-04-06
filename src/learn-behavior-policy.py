@@ -9,23 +9,28 @@ from pyflann import *
 from pyrl.rlglue import RLGlueLocal as RLGlueLocal
 from pyrl.environments.pinball import PinballRLGlue
 
-def learn_policy(options, index, nepisodes, max_steps):
+def learn_policy(options, index, nepisodes, max_steps, prefix):
     agent = IntraOptionLearning(options)
     environment = PinballRLGlue('pinball_hard_single.cfg')
 
+    score_file = csv.writer(open(prefix + '-behavior-policy.csv', 'wb'))
     # Connect to RL-Glue
     rlglue = RLGlueLocal.LocalGlue(environment, agent)
     rlglue.RL_init()
 
     for i in xrange(nepisodes):
+	print 'Episode ', i
 	terminated = rlglue.RL_episode(max_steps)
 	total_steps = rlglue.RL_num_steps()
 	total_reward = rlglue.RL_return()
 
-	print '\t\t %d steps, %d reward, %d terminated'%(total_steps, total_reward, terminated)
+	print '\t %d steps, %d reward, %d terminated'%(total_steps, total_reward, terminated)
 	score_file.writerow([i, total_steps, total_reward, terminated])
 
 	rlglue.RL_cleanup()
+
+    # TODO define proper serialization
+    cPickle.dump(agent, open(prefix + '-behavior-policy.pl', 'wb'))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Learn the behavior policy over options')
@@ -69,5 +74,5 @@ if __name__ == "__main__":
 	option.membership = cl.membership
 
     # Learn the behavior policy
-    learn_policy(options, args.nepisodes, args.max_steps)
+    learn_policy(options, flann, args.nepisodes, args.max_steps, args.prefix)
 
