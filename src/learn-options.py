@@ -113,7 +113,7 @@ def learn_options(dataset, index, cl, num_episodes, max_steps, prefix):
         rlglue.RL_init()
 
         # Execute episodes
-        score_file = csv.writer(open(prefix + '-score.csv', 'wb'))
+        score_file = csv.writer(open(prefix + '-score' + str(idx) + '.csv', 'wb'))
 
         start_position = dataset[random.choice(cl[option.source_community])][:2]
         random_init = False
