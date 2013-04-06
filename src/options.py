@@ -1,10 +1,12 @@
 import random
 import operator
 import numpy as np
+from operator import *
 from itertools import *
 from rlglue.types import Action
 from rlglue.types import Observation
 from rlglue.agent.Agent import Agent
+from rlglue.utils import TaskSpecVRLGLUE3
 from pyrl.basis.fourier import FourierBasis
 
 class Option:
@@ -88,7 +90,7 @@ class Option:
 	:rtype: int
 
 	"""
-	return np.dot(self.weights, self.basis.computeFeatures(observation)).argmax()
+	return np.dot(self.weights[0,:,:].T, np.array(self.basis.computeFeatures(observation))).argmax()
 
     def __getstate__(self):
 	""" Implement pickling manually to avoid duplicating dataset
@@ -129,23 +131,19 @@ class IntraOptionLearning(Agent):
 	self.alpha = 0.1
 	self.gamma = 0.1
 	self.epsilon = 0.1
+	self.fa_order = 4
 	self.options = options
+	self.current_option = None
+	self.finished_learning = False
 
-
-    def intraoption_update(self, last_features, last_action, current_reward, current_features):
+    def intraoption_update(self, reward, features, observation):
         """ Perform a step of intra-option learning
 
-	:param last_features: The features representation of the last state
-	:param last_action: The last action taken
-	:param current_reward: The reward just obtained
-	:param current_features: The features representation of the current state
+	:param reward: The reward just obtained
+	:param features: The features representation of the current state
 
 	"""
-	# Subset of options for which pi_o(s) = a
-        consistent_options = ifilter(lambda idx: self.options[idx].pi(observation) == last_action,
-		xrange(len(self.options)))
-
-	for i in consistent_options:
+	for i in self.consistent_options():
 	    # Given that the current option must terminate, find which
 	    # possible next option has the highest value
 	    current_value = 0.0
@@ -155,11 +153,20 @@ class IntraOptionLearning(Agent):
                 current_value = max(izip(np.dot(self.weights[initializable_options], features),
 			initializable_options), key=itemgetter(0))[1]
 	    else:
-	        current_value = np.dot(self.weights[i], current_features)
+	        current_value = np.dot(self.weights[i], features)
 
-            delta = reward + self.gamma*current_value - np.dot(self.weights[i], last_features)
+            delta = reward + self.gamma*current_value - np.dot(self.weights[i], self.last_features)
 
-            self.weights[i] = theta + self.alpha*delta*current_features
+            self.weights[i] = self.weights[i] + self.alpha*delta*self.last_features
+
+    def consistent_options(self):
+	"""
+	:returns: a subset of the options for which pi_o(s) = a
+	:rtype: list of int
+	"""
+        return filter(lambda idx: self.options[idx].pi(self.last_observation) == self.last_action,
+			xrange(len(self.options)))
+
 
     def initializable_options(self, observation):
 	""" Find the options available under the current state
@@ -183,7 +190,7 @@ class IntraOptionLearning(Agent):
 	initializable_options = self.initializable_options(observation)
 
         if random.random() < self.epsilon:
-	    return self.options[random.choice(initializable_options)]
+	    return random.choice(initializable_options)
 
         return max(izip(np.dot(self.weights[initializable_options], features), initializable_options),
 			key=itemgetter(0))[1]
@@ -198,7 +205,7 @@ class IntraOptionLearning(Agent):
 	:rtype: Option
 
 	"""
-	if self.current_option.terminate(observation):
+	if self.current_option == None or self.current_option.terminate(observation):
             self.current_option = self.options[self.egreedy(observation, features)]
 
         return self.current_option
@@ -227,6 +234,7 @@ class IntraOptionLearning(Agent):
 
         self.last_action = 0
 	self.last_features = []
+	self.last_observation = []
 
     def agent_start(self, obs):
         """ This function is called by the environment in the initial state.
@@ -241,6 +249,7 @@ class IntraOptionLearning(Agent):
 	observation = np.array(list(obs.doubleArray))
         current_features = self.basis.computeFeatures(observation)
 
+	self.last_observation = observation
 	self.last_features = current_features
 	self.last_action = self.mu(observation, current_features).pi(observation)
 
@@ -266,10 +275,11 @@ class IntraOptionLearning(Agent):
         current_features = self.basis.computeFeatures(observation)
 
 	if not self.finished_learning:
-	    self.intraoption_update(self.last_features, self.last_action, reward, current_features)
+	    self.intraoption_update(reward, current_features, observation)
 
+	self.last_observation = observation
 	self.last_features = current_features
-	self.last_action = self.mu(observation, features).pi(observation)
+	self.last_action = self.mu(observation, current_features).pi(observation)
 
 	action = Action()
         action.intArray = [self.last_action]
@@ -285,8 +295,9 @@ class IntraOptionLearning(Agent):
 
 	"""
 	if not self.finished_learning:
-	    self.intraoption_update(self.last_features, self.last_action,
-			    reward, np.zeros(self.last_features.shape))
+	    for i in self.consistent_options():
+                delta = reward - np.dot(self.weights[i], self.last_features)
+                self.weights[i] = self.weights[i] + self.alpha*delta*self.last_features
 
     def agent_cleanup(self):
 	pass
