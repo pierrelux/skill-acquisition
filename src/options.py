@@ -8,6 +8,7 @@ from rlglue.types import Observation
 from rlglue.agent.Agent import Agent
 from rlglue.utils import TaskSpecVRLGLUE3
 from pyrl.basis.fourier import FourierBasis
+from rlglue.environment.Environment import Environment
 
 class Option:
     """ A Markov option o consists of a tuple:
@@ -304,3 +305,62 @@ class IntraOptionLearning(Agent):
 
     def agent_message(self, msg):
 	return "Intra-Option Learning does not understand your message."
+
+class PseudoRewardEnvironment(Environment):
+    """ This class is a decorator for an RL-Glue environment.
+
+    We need it to change at run time the terminal states of the
+    underlying environment, and imposing our pseudo-reward function
+    for the sake of learning a give policy for an option.
+
+    """
+    END_EPISODE = 10000
+
+    def __init__(self, decorated, target, membership, kdtree):
+        """
+        :param decorated: The base environment
+        :type decorated: Environment
+        :param target: The target community to reach
+        :type target: int
+        :param membership: A vector of the community membership for each node
+        :type membership: list
+        :param kdtree: A KD-Tree index
+        :type kdtree: FLANN
+
+        """
+        self.decorated = decorated
+        self.target_community = target
+        self.membership = membership
+        self.kdtree = kdtree
+
+    def episode_ended(self, observation):
+        """ Check if the agent has reached the target region
+
+        :returns: True if the nearest neighbor is in the target community
+        :rtype: bool
+
+        """
+        knn_idx, dist = self.kdtree.nn_index(np.array([observation]))
+        return self.membership[knn_idx] == self.target_community
+
+    def env_step(self, action):
+        returnRO = self.decorated.env_step(action)
+
+        # Set pseudo-termination
+        if self.episode_ended(returnRO.o.doubleArray):
+            returnRO.r = self.END_EPISODE
+            returnRO.terminal = True
+
+        return returnRO
+
+    def env_init(self):
+        return self.decorated.env_init()
+
+    def env_start(self):
+        return self.decorated.env_start()
+
+    def env_cleanup(self):
+        self.decorated.env_cleanup()
+
+    def env_message(self, message):
+        return self.decorated.env_message(message)
