@@ -115,18 +115,18 @@ def learn_options(dataset, index, cl, num_episodes, max_steps, prefix):
         # Execute episodes
         score_file = csv.writer(open(prefix + '-score' + str(idx) + '.csv', 'wb'))
 
-        start_position = dataset[random.choice(cl[option.source_community])][:2]
+        initial_state = dataset[random.choice(cl[option.source_community])]
         random_init = False
 
         for i in xrange(num_episodes):
             # Use all of the nodes in the source community as possible
             # initial positions. Selected at random in each episode
             if random_init:
-                start_position = dataset[random.choice(cl[option.source_community])][:2]
+                initial_state = dataset[random.choice(cl[option.source_community])]
 
-            rlglue.RL_env_message('set-start-state %f %f'%(start_position[0], start_position[1]))
+            rlglue.RL_env_message('set-start-state %f %f %f %f'%(initial_state[0], initial_state[1], initial_state[2], initial_state[3]))
 
-            print '\tEpsiode %d of %d starting at %f, %f'%(i, num_episodes, start_position[0], start_position[1])
+            print '\tEpsiode %d of %d starting at %f %f %f %f'%(i, num_episodes, initial_state[0], initial_state[1], initial_state[2], initial_state[3])
             terminated = rlglue.RL_episode(max_steps)
 
             total_steps = rlglue.RL_num_steps()
