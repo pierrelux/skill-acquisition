@@ -48,6 +48,7 @@ def learn_option(source, target, dataset_filename, index_filename, clustering_fi
     logger.info("Loading clustering")
     vd = cPickle.load(open(clustering_filename, 'rb'))
 
+    score_file = csv.writer(open(prefix + '-score.csv', 'wb'))
     # Use the clustering with the highest modularity
     cl = vd.as_clustering()
     print cl.graph.ecount(), ' edges'
@@ -65,13 +66,12 @@ def learn_option(source, target, dataset_filename, index_filename, clustering_fi
     rlglue.RL_init()
 
     # Execute episodes
-    score_file = csv.writer(open(prefix + '-score.csv', 'wb'))
 
     for i in xrange(num_episodes):
         if random_init:
-            start_position = dataset[random.choice(cl[source])][:2]
-            rlglue.RL_env_message('set-start-state %f %f'%(start_position[0], start_position[1]))
-            logger.info("Set initial random configuration at %f %f"%(start_position[0], start_position[1]))
+            initial_state = dataset[random.choice(cl[source])]
+            rlglue.RL_env_message('set-start-state %f %f %f %f'%(initial_state[0], initial_state[1], initial_state[2], initial_state[3]))
+            logger.info("Set initial random state at %f %f %f %f"%(initial_state[0], initial_state[1], initial_state[2], initial_state[3]))
 
         logger.info("Starting episode %d of %d"%(i, num_episodes))
         terminated = rlglue.RL_episode(max_steps)
@@ -80,9 +80,12 @@ def learn_option(source, target, dataset_filename, index_filename, clustering_fi
         total_reward = rlglue.RL_return()
         logger.info("%d steps, %d reward, %d terminated"%(total_steps, total_reward, terminated))
 
-        score_file.writerow([i, total_steps, total_reward, terminated])
+        with open(prefix + '-score.csv', 'a') as f: 
+            writer = csv.writer(f)
+            writer.writerow([i, total_steps, total_reward, terminated])
 
     rlglue.RL_cleanup()
+    logger.info("Learning terminated")
 
     option = options.Option(source, target)
     option.weights = agent.weights[0,:,:]
@@ -120,15 +123,23 @@ if __name__ == "__main__":
     print len(options_connectivity), ' options found'
 
     # Launch pp server with autodiscovery
-    job_server = pp.Server()
-    print 'Number of cpus: ', job_server.get_ncpus()
+    job_server = pp.Server(ppservers=("*",))
+    job_server.set_ncpus(0)
 
-    options = [job_server.submit(learn_option, (source, target,
+    print 'Submitting jobs...'
+    jobs = [job_server.submit(learn_option, (source, target,
             args.dataset, args.index, args.clustering, 'pinball_hard_single.cfg', args.nepisodes, args.max_steps))
             for source, target in options_connectivity]
 
+    print 'Number of cpus: ', job_server.get_ncpus()
+    job_server.print_stats()
+
+    print 'Waiting for result...'
     job_server.wait()
+    
+    options = [job() for job in jobs]
+
     job_server.print_stats()
 
     # Serialize options
-    #cPickle.dump(options, open(prefix + '-options.pl', 'wb'))
+    cPickle.dump(options, open(args.prefix + '-options.pl', 'wb'))
