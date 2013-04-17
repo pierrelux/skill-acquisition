@@ -80,14 +80,14 @@ def learn_option(source, target, dataset_filename, index_filename, clustering_fi
         total_reward = rlglue.RL_return()
         logger.info("%d steps, %d reward, %d terminated"%(total_steps, total_reward, terminated))
 
-        with open(prefix + '-score.csv', 'a') as f: 
+        with open(prefix + '-score.csv', 'a') as f:
             writer = csv.writer(f)
             writer.writerow([i, total_steps, total_reward, terminated])
 
     rlglue.RL_cleanup()
     logger.info("Learning terminated")
 
-    option = options.Option(source, target)
+    option = options.KNNOption(source, target)
     option.weights = agent.weights[0,:,:]
     option.basis = agent.basis
 
@@ -118,8 +118,11 @@ if __name__ == "__main__":
     cl = vd.as_clustering()
 
     # Find the neighboring communities
-    options_connectivity = set(((cl.membership[v1], cl.membership[v2])
-        for v1, v2 in cl.graph.get_edgelist() if cl.membership[v1] != cl.membership[v2]))
+    options_connectivity = [set(((cl.membership[v1], cl.membership[v2])
+        for v1, v2 in cl.graph.get_edgelist() if cl.membership[v1] != cl.membership[v2]))]
+
+    options_connectivity.extend([(target, source) for source, target in options_connectivity])
+
     print len(options_connectivity), ' options found'
 
     # Launch pp server with autodiscovery
@@ -136,10 +139,13 @@ if __name__ == "__main__":
 
     print 'Waiting for result...'
     job_server.wait()
-    
+
     options = [job() for job in jobs]
 
     job_server.print_stats()
+
+    # Throw in primitive actions
+    options.extend((options.PrimitiveOption(a) for a in range(0, 5)))
 
     # Serialize options
     cPickle.dump(options, open(args.prefix + '-options.pl', 'wb'))
