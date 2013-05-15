@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
+from itertools import *
+from sklearn.cluster import spectral_clustering
 import igraph as ig
 import numpy as np
 import argparse
 import cPickle
+
 
 parser = argparse.ArgumentParser(description='Plot the cluster graph')
 parser.add_argument('dataset', help='Input dataset used to build the index')
@@ -45,7 +48,7 @@ with open(args.configuration) as fp:
 
 fig = plt.figure()
 ax = fig.add_subplot(111)
-#ax = fig.add_axes([0, 0, 1, 1])
+
 ax.invert_yaxis()
 ax.axis('equal')
 
@@ -56,24 +59,30 @@ ax.add_patch(plt.Circle(target_pos, target_rad, ec='None', fc='red'))
 
 # Draw graph
 edges = LineCollection(([dataset[v1][:2], dataset[v2][:2]] for v1, v2 in graph.get_edgelist()))
-edges.set_color('black')
+edges.set_color('Lavender')
 edges.set_zorder(1)
 ax.add_collection(edges)
-
 
 # Draw points
 params = {}
 if args.clustering:
     # Open the vertex dendogram
     print 'Loading clustering...'
-    vd = cPickle.load(open(args.clustering, 'rb'))
-
-    # Use the clustering with the highest modularity
-    cl = vd.as_clustering()
-    params['c'] = cl.membership
+    membership = cPickle.load(open(args.clustering, 'rb'))
+    params['c'] = membership
     params['cmap'] = plt.get_cmap('hsv')
+
+    # Highlight boundary points
+    boundary = [v.index for v in graph.vs
+            if sum((membership[nid] != membership[v.index]
+                for nid in graph.neighbors(v.index))) > 7]
+
+    print len(boundary)
 
 ax.scatter(dataset[:,0], dataset[:,1], edgecolors='none', s=10, **params)
 
-plt.show()
-#plt.savefig("neighborhood-graph.png", dpi=100)
+if args.clustering:
+    ax.scatter(dataset[boundary,0], dataset[boundary,1], marker='o', s=12, facecolor='None')
+
+#plt.show()
+plt.savefig("neighborhood-graph.png", dpi=100)

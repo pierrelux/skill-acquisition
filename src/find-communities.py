@@ -38,4 +38,5 @@ print '%d %d %f'%(args.time, len(cl), cl.modularity)
 if args.verbose:
     print 'Saving clustering...'
 
+pickle.dump(cl.membership, open(args.prefix + '-membership.pickle', 'wb'))
 pickle.dump(vd, open(args.prefix + '-clustering.pickle', 'wb'))
