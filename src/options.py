@@ -1,8 +1,10 @@
 import random
 import operator
 import numpy as np
+from pyflann import *
 from operator import *
 from itertools import *
+from scipy.stats import mode
 from rlglue.types import Action
 from rlglue.types import Observation
 from rlglue.agent.Agent import Agent
@@ -92,48 +94,137 @@ class KNNOption(Option):
     the Workshop on Multiagent Interaction Networks (MAIN 2013), 2013.
 
     """
-    def __init__(self, source, target):
-        """ Create an option to navigate from a community to another
+    def __init__(self, label, membership, index_filename, dataset_filename, nn=1):
+        """ Create an option to reach the boundary
 
-        :param source: The source community
-        :type source: int
-        :param target: The target community
-        :type target: int
+        :param label: The community label over which this option is defined
+        :type label: int
+        :param nn: The number of nearest neighbor for majority voting
+        :type nn: int
 
         """
-        self.source_community = source
-        self.target_community = target
-        self.membership = None
-        self.weights = None
+        self.nn = nn
+        self.label = label
+        self.membership = membership
+
         self.index = None
+        self.index_filename = index_filename
+        self.dataset_filename = dataset_filename
+        self.initial_states = None
+
         self.basis = None
+        self.weights = None
+
+    def initial_state(self):
+        return random.choice(self.initial_states)
 
     def initiate(self, observation):
         """ Initiation predicate
 
-        An option can be initiated if it contains a observation which is the closest the current observation.
+        The option can be initiated if the majority label among the
+        nearest neighbors corresponds to the option's label.
 
         :param observation: the current observation
-        :returns: True if this option can be taken in the current observation
+        :returns: True if this option can be taken under the current observation
         :rtype: bool
 
         """
-        knn_idx, dist = self.index.nn_index(observation)
-        return self.membership[knn_idx] == self.source_community
+        knn_idx, dists = self.index.nn_index(observation, num_neighbors=self.nn)
+        return mode(self.membership[knn_idx[0]])[0][0] == self.label
 
     def terminate(self, observation):
         """ Termination (beta) function
 
         The definition of beta that we adopt here makes it either 0 or 1.
-        It returns 1 whenever its closest neighbor belongs to a different community.
+        It returns 1 whenever its closest neighbors belongs to a different community.
 
         :param observation: the current observation
         :returns: True if this option must terminate in the current observation
         :rtype: bool
 
         """
-        knn_idx, dist = self.index.nn_index(observation)
-        return self.membership[knn_idx] != self.source_community
+        return not self.initiate(observation)
+
+    def pi(self, observation):
+        """ A deterministic greedy policy with respect to the approximate
+        action-value function. Please note that we generally don't want to
+        learn a policy over non-stationary options. Exploration strategies over
+        primitive actions are therefore not needed in this case.
+
+        :param observation: the current observation
+        :returns: the greedy action with respect to the action-value function of
+        this option
+        :rtype: int
+
+        """
+        np.dot(self.weights.T, np.array(self.basis.computeFeatures(observation))).argmax()
+
+    def __getstate__(self):
+        """ Implement pickling manually to avoid duplicating dataset
+
+        """
+        odict = self.__dict__.copy()
+        del odict['index']
+        del odict['initial_states']
+        return odict
+
+    def __setstate__(self, dict):
+        """ Load the pickled object state
+
+        The membership vector and index will have to be re-loaded manually.
+
+        """
+        self.__dict__.update(dict)
+
+        self.index = FLANN()
+        dataset = np.loadtxt(self.dataset_filename)
+        self.index.load_index(self.index_filename, dataset)
+        self.initial_states = dataset[self.membership == self.label]
+
+class LogisticOption(Option):
+    """ This type of option seeks to exit the subspace over which it's
+    defined through the clustering procedure.
+
+    A logistic classifier is learnt over the clusters in order to generalize
+    to the continous state space.
+    """
+
+    def __init__(self, label, predictor, initial_states):
+        """
+        :param label: The community label over which this option is defined
+        :type label: int
+        :param predictor: A one-vs-all predictor
+        :type predictor: sklearn.linear_model.LogisticRegression
+        """
+        self.predictor = predictor
+        self.initial_states = initial_states
+
+        self.basis = None
+        self.weights = None
+
+    def initial_state(self):
+        return random.choice(self.initial_states)
+
+    def initiate(self, observation):
+        """ Initiation predicate
+
+        :param observation: the current observation
+        :returns: True if predictor recognizes the observation as cluster member
+        :rtype: bool
+
+        """
+        return self.predictor.predict(observation) == self.label
+
+    def terminate(self, observation):
+        """ Stochastic termination
+
+        :param observation: the current observation
+        :returns: True if the option must terminate
+        :rtype: bool
+
+        """
+        labels_pr = self.predictor.predict_proba(observation)
+        return random.random() > labels_pr[self.label]
 
     def pi(self, observation):
         """ A deterministic greedy policy with respect to the approximate
@@ -148,25 +239,6 @@ class KNNOption(Option):
 
         """
         return np.dot(self.weights.T, np.array(self.basis.computeFeatures(observation))).argmax()
-
-    def __getstate__(self):
-        """ Implement pickling manually to avoid duplicating dataset
-
-        """
-        odict = self.__dict__.copy()
-        del odict['membership']
-        del odict['index']
-        return odict
-
-    def __setstate__(self, dict):
-        """ Load the pickled object state
-
-        The membership vector and index will have to be re-loaded manually.
-
-        """
-        self.__dict__.update(dict)
-        self.membership = None
-        self.index = None
 
 class IntraOptionLearning(Agent):
     """ This class implements Intra-Option learning with
@@ -369,41 +441,24 @@ class PseudoRewardEnvironment(Environment):
     for the sake of learning a give policy for an option.
 
     """
-    END_EPISODE = 10000
-
-    def __init__(self, decorated, target, membership, kdtree):
+    def __init__(self, decorated, option, subgoal_reward):
         """
         :param decorated: The base environment
         :type decorated: Environment
-        :param target: The target community to reach
-        :type target: int
-        :param membership: A vector of the community membership for each node
-        :type membership: list
-        :param kdtree: A KD-Tree index
-        :type kdtree: FLANN
+        :param option: The option over which to set up the pseudo-reward
+        :type option: Option
 
         """
         self.decorated = decorated
-        self.target_community = target
-        self.membership = membership
-        self.kdtree = kdtree
-
-    def episode_ended(self, observation):
-        """ Check if the agent has reached the target region
-
-        :returns: True if the nearest neighbor is in the target community
-        :rtype: bool
-
-        """
-        knn_idx, dist = self.kdtree.nn_index(np.array([observation]))
-        return self.membership[knn_idx] == self.target_community
+        self.option = option
+        self.subgoal_reward = subgoal_reward
 
     def env_step(self, action):
         returnRO = self.decorated.env_step(action)
 
         # Set pseudo-termination
-        if self.episode_ended(returnRO.o.doubleArray):
-            returnRO.r = self.END_EPISODE
+        if self.option.terminate(np.asarray(returnRO.o.doubleArray)):
+            returnRO.r += self.subgoal_reward
             returnRO.terminal = True
 
         return returnRO
