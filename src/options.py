@@ -80,6 +80,9 @@ class PrimitiveOption(Option):
     def pi(self, observation):
         return self.action
 
+    def __str__(self):
+        return 'Primitive option %d'%(self.action,)
+
 class KNNOption(Option):
     """ K-Nearest Neighbor Option
 
@@ -157,7 +160,10 @@ class KNNOption(Option):
         :rtype: int
 
         """
-        np.dot(self.weights.T, np.array(self.basis.computeFeatures(observation))).argmax()
+        return np.dot(self.weights.T, self.basis.computeFeatures(observation)).argmax()
+
+    def __str__(self):
+        return 'KNN option, community %d, nn %d'%(self.label, self.nn)
 
     def __getstate__(self):
         """ Implement pickling manually to avoid duplicating dataset
@@ -238,7 +244,7 @@ class LogisticOption(Option):
         :rtype: int
 
         """
-        return np.dot(self.weights.T, np.array(self.basis.computeFeatures(observation))).argmax()
+        return np.dot(self.weights.T, self.basis.computeFeatures(observation)).argmax()
 
 class IntraOptionLearning(Agent):
     """ This class implements Intra-Option learning with
@@ -250,16 +256,16 @@ class IntraOptionLearning(Agent):
 
     """
 
-    def __init__(self, options):
+    def __init__(self, options, alpha, gamma, epsilon, fa_order):
         """
         :param options: A set of options with learnt policies
         :type options: list of Option
 
         """
-        self.alpha = 0.1
-        self.gamma = 0.1
-        self.epsilon = 0.1
-        self.fa_order = 4
+        self.alpha = alpha
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.fa_order = fa_order
         self.options = options
         self.current_option = None
         self.finished_learning = False
@@ -271,28 +277,25 @@ class IntraOptionLearning(Agent):
         :param features: The features representation of the current state
 
         """
-        for i in self.consistent_options():
-            # Given that the current option must terminate, find which
-            # possible next option has the highest value
+
+        for i in self.consistent_options(self.last_observation, self.last_action):
             current_value = 0.0
             if self.options[i].terminate(observation):
                 initializable_options = self.initializable_options(observation)
-
-                current_value = max(izip(np.dot(self.weights[initializable_options], features),
-                        initializable_options), key=itemgetter(0))[1]
+                current_value = np.dot(self.weights[:,initializable_options].T, features).argmax()
             else:
-                current_value = np.dot(self.weights[i], features)
+                current_value = np.dot(self.weights[:,i].T, features)
 
-            delta = reward + self.gamma*current_value - np.dot(self.weights[i], self.last_features)
+            delta = reward + self.gamma*current_value - np.dot(self.weights[:,i].T, self.last_features)
 
-            self.weights[i] = self.weights[i] + self.alpha*delta*self.last_features
+            self.weights[:,i] = self.weights[:,i] + self.alpha*delta*self.last_features
 
-    def consistent_options(self):
+    def consistent_options(self, observation, action):
         """
         :returns: a subset of the options for which pi_o(s) = a
         :rtype: list of int
         """
-        return filter(lambda idx: self.options[idx].pi(self.last_observation) == self.last_action,
+        return filter(lambda idx: self.options[idx].pi(observation) == action,
                         xrange(len(self.options)))
 
 
@@ -317,11 +320,11 @@ class IntraOptionLearning(Agent):
         """
         initializable_options = self.initializable_options(observation)
 
-        if random.random() < self.epsilon:
+        if not self.finished_learning and (random.random() < self.epsilon):
+            print '************ Random option'
             return random.choice(initializable_options)
 
-        return max(izip(np.dot(self.weights[initializable_options], features), initializable_options),
-                        key=itemgetter(0))[1]
+        return initializable_options[np.dot(self.weights[:,initializable_options].T, features).argmax()]
 
     def mu(self, observation, features=None):
         """ The semi-markov deterministic policy that follows
@@ -335,6 +338,7 @@ class IntraOptionLearning(Agent):
         """
         if self.current_option == None or self.current_option.terminate(observation):
             self.current_option = self.options[self.egreedy(observation, features)]
+            print 'Changing option ', self.current_option
 
         return self.current_option
 
@@ -358,7 +362,7 @@ class IntraOptionLearning(Agent):
 
         observation_ranges = spec.getDoubleObservations()
         self.basis = FourierBasis(len(observation_ranges), self.fa_order, observation_ranges)
-        self.weights = np.zeros((len(self.options), self.basis.numTerms))
+        self.weights = np.zeros((self.basis.numTerms, len(self.options)))
 
         self.last_action = 0
         self.last_features = []
@@ -374,12 +378,13 @@ class IntraOptionLearning(Agent):
         :rtype: a primitive action under the form of a :class:`rlglue.types.Action`
 
         """
-        observation = np.array(list(obs.doubleArray))
+        observation = np.array(obs.doubleArray)
         current_features = self.basis.computeFeatures(observation)
 
         self.last_observation = observation
         self.last_features = current_features
         self.last_action = self.mu(observation, current_features).pi(observation)
+        print self.last_action
 
         action = Action()
         action.intArray = [self.last_action]
@@ -399,7 +404,7 @@ class IntraOptionLearning(Agent):
         :rtype: a primitive action under the form of a :class:`rlglue.types.Action`
 
         """
-        observation = np.array(list(obs.doubleArray))
+        observation = np.array(obs.doubleArray)
         current_features = self.basis.computeFeatures(observation)
 
         if not self.finished_learning:
@@ -408,6 +413,7 @@ class IntraOptionLearning(Agent):
         self.last_observation = observation
         self.last_features = current_features
         self.last_action = self.mu(observation, current_features).pi(observation)
+        print self.last_action
 
         action = Action()
         action.intArray = [self.last_action]
@@ -423,9 +429,9 @@ class IntraOptionLearning(Agent):
 
         """
         if not self.finished_learning:
-            for i in self.consistent_options():
-                delta = reward - np.dot(self.weights[i], self.last_features)
-                self.weights[i] = self.weights[i] + self.alpha*delta*self.last_features
+            for i in self.consistent_options(self.last_observation, self.last_action):
+                delta = reward - np.dot(self.weights[:,i].T, self.last_features)
+                self.weights[:,i] = self.weights[:,i] + self.alpha*delta*self.last_features
 
     def agent_cleanup(self):
         pass
@@ -468,6 +474,49 @@ class PseudoRewardEnvironment(Environment):
 
     def env_start(self):
         return self.decorated.env_start()
+
+    def env_cleanup(self):
+        self.decorated.env_cleanup()
+
+    def env_message(self, message):
+        return self.decorated.env_message(message)
+
+class TrajectoryRecorder(Environment):
+    """ Records trajectories taken in the environment """
+
+    def __init__(self, decorated, filename):
+        """ This class provides a decorator wrapper to seamlessly record
+        a trajectory taken in the environment.
+
+        :param environment: an rlglue environment
+        :type environment: Environment
+
+        """
+        self.decorated = decorated
+        self.filename = filename
+        self.trajectory_count = 0
+        self.trajectory_file = None
+
+    def env_init(self):
+        return self.decorated.env_init()
+
+    def env_start(self):
+        obs = self.decorated.env_start()
+        self.trajectory_file = open('%s-%d.dat'%(self.filename, self.trajectory_count), 'wb')
+        self.trajectory_file.write(' '.join(map(str, obs.doubleArray)) + '\n')
+        self.trajectory_file.flush()
+        return obs
+
+    def env_step(self, action):
+        returnRO = self.decorated.env_step(action)
+        self.trajectory_file.write(' '.join(map(str, returnRO.o.doubleArray)) + '\n')
+        self.trajectory_file.flush()
+
+        if returnRO.terminal:
+            self.trajectory_count += 1
+            self.trajectory_file.close()
+
+        return returnRO
 
     def env_cleanup(self):
         self.decorated.env_cleanup()
