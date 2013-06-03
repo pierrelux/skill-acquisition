@@ -202,6 +202,7 @@ class LogisticOption(Option):
         :param predictor: A one-vs-all predictor
         :type predictor: sklearn.linear_model.LogisticRegression
         """
+        self.label = label
         self.predictor = predictor
         self.initial_states = initial_states
 
@@ -230,7 +231,7 @@ class LogisticOption(Option):
 
         """
         labels_pr = self.predictor.predict_proba(observation)
-        return random.random() > labels_pr[self.label]
+        return random.random() > labels_pr[0,self.label]
 
     def pi(self, observation):
         """ A deterministic greedy policy with respect to the approximate
