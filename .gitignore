@@ -1,2 +1,6 @@
 *.swp
 *.un~
+*.pyc
+*.bak
+experiments/*
+external/rlglue
