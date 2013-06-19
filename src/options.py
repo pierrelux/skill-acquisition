@@ -502,10 +502,15 @@ class TrajectoryRecorder(Environment):
         return self.decorated.env_init()
 
     def env_start(self):
+        if self.trajectory_file and not self.trajectory_file.closed:
+            self.trajectory_file.close()
+            self.trajectory_count += 1
+
         obs = self.decorated.env_start()
         self.trajectory_file = open('%s-%d.dat'%(self.filename, self.trajectory_count), 'wb')
         self.trajectory_file.write(' '.join(map(str, obs.doubleArray)) + '\n')
         self.trajectory_file.flush()
+
         return obs
 
     def env_step(self, action):
@@ -514,7 +519,6 @@ class TrajectoryRecorder(Environment):
         self.trajectory_file.flush()
 
         if returnRO.terminal:
-            self.trajectory_count += 1
             self.trajectory_file.close()
 
         return returnRO
