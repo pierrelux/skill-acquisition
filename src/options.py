@@ -519,6 +519,7 @@ class TrajectoryRecorder(Environment):
         self.trajectory_file.flush()
 
         if returnRO.terminal:
+            self.trajectory_count += 1
             self.trajectory_file.close()
 
         return returnRO
