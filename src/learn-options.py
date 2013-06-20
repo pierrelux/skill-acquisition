@@ -41,7 +41,7 @@ def learn_option(option, environment_name, num_episodes, max_steps):
     logger.addHandler(fh)
 
     # Create agent and environments
-    agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=1.0, lmbda=0.9,
+    agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=0.8, lmbda=0.9,
     params={'name':'fourier', 'order':4})
 
     # Wrap the environment with the option's pseudo-reward
@@ -96,7 +96,6 @@ if __name__ == "__main__":
 		    agent is allowed to take in the environment')
     parser.add_argument('-p', '--prefix', action='store', type=str,
 		    dest='prefix', help="output prefix (default: dataset)")
-    parser.add_argument('--primitive', action='store_true', help='Add primitve actions')
     args = parser.parse_args()
     if not args.prefix:
         args.prefix = os.path.splitext(os.path.basename(args.options))[0]
@@ -114,10 +113,6 @@ if __name__ == "__main__":
     job_server.print_stats()
 
     subgoal_options = [job() for job in jobs]
-
-    # Throw in primitive actions
-    if args.primitive:
-        subgoal_options.extend((options.PrimitiveOption(a) for a in range(0, 5)))
 
     # Serialize options
     cPickle.dump(subgoal_options, open(args.prefix + '-learned.pl', 'wb'))
