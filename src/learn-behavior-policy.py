@@ -2,6 +2,7 @@
 import os
 import pp
 import time
+import options
 import cPickle
 import smtplib
 import argparse
@@ -14,9 +15,7 @@ def learn_policy(options_learned, environment_name, nepisodes, max_steps, prefix
     from pyrl.environments.pinball import PinballRLGlue
 
     agent = options.IntraOptionLearning(options_learned, alpha=0.01, gamma=1.0, epsilon=0.1, fa_order=4)
-    environment = PinballRLGlue(environment_name)
-
-    score_file = csv.writer(open(prefix + '-behavior-policy.csv', 'wb'))
+    environment = options.TrajectoryRecorder(PinballRLGlue(environment_name), prefix + '-trajectory')
 
     # Connect to RL-Glue
     rlglue = RLGlueLocal.LocalGlue(environment, agent)
@@ -32,7 +31,10 @@ def learn_policy(options_learned, environment_name, nepisodes, max_steps, prefix
         print '\t %d steps, %d reward, %d terminated'%(total_steps, total_reward, terminated)
         score = [i, total_steps, total_reward, terminated]
         scores.append(score)
-        score_file.writerow(score)
+
+        with open(prefix + '-behavior-policy.csv', 'a') as f:
+            writer = csv.writer(f)
+            writer.writerow(score)
 
     rlglue.RL_cleanup()
 
@@ -56,6 +58,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--max-steps', dest='max_steps', type=int,
                     default=10000, help='the maximum number of steps that the\
                     agent is allowed to take in the environment')
+    parser.add_argument('--primitive', action='store_true', help='Add primitve actions')
     parser.add_argument('-a', '--number-agents', type=int, default=100, help='number of agents to average over')
     parser.add_argument('-p', '--prefix', action='store', type=str,
                     dest='prefix', help="output prefix (default: dataset)")
@@ -70,17 +73,24 @@ if __name__ == "__main__":
     options_learned = cPickle.load(open(args.options, 'rb'))
     print 'Learning with %d options'%(len(options_learned),)
 
-    job_server = pp.Server(ppservers=("*",))
+    # Throw in primitive actions
+    if args.primitive:
+        print 'Using primitive actions.'
+        options_learned.extend((options.PrimitiveOption(a) for a in range(0, 5)))
+
+    #job_server = pp.Server(ppservers=("*",))
 
     # Learn the behavior policy
-    jobs = [job_server.submit(learn_policy,
-               (options_learned, args.environment, args.nepisodes, args.max_steps, args.prefix))
-                   for agents in xrange(args.number_agents)]
+    #jobs = [job_server.submit(learn_policy,
+    #           (options_learned, args.environment, args.nepisodes,
+    #               args.max_steps, args.prefix + '-agent%d'%(agent,)))
+    #                   for agent in xrange(args.number_agents)]
 
-    job_server.wait()
-    job_server.print_stats()
+    #job_server.wait()
+    #job_server.print_stats()
 
-    scores = [job() for job in jobs]
-    cPickle.dump(scores, open(args.prefix + '-behavior-policy-aggregated.pl', 'wb'))
+    #scores = [job() for job in jobs]
+    #cPickle.dump(scores, open(args.prefix + '-behavior-policy-aggregated.pl', 'wb'))
+    learn_policy(options_learned, args.environment, args.nepisodes, args.max_steps, args.prefix)
 
-    job_done('Experiment has finished')
+    #job_done('Experiment has finished')
