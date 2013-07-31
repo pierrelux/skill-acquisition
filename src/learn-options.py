@@ -27,25 +27,15 @@ def learn_option(option, environment_name, num_episodes, max_steps):
     import random
     import csv
 
-    prefix = 'option-%d'%(option.label)
+    prefix = 'option-%d-to-%d'%(option.label, option.target)
     score_file = csv.writer(open(prefix + '-score.csv', 'wb'))
 
-    # Set up logging
-    logger = logging.getLogger(prefix)
-    logger.setLevel(logging.DEBUG)
-
-    fh = logging.FileHandler(prefix + '.log')
-    fh.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-
     # Create agent and environments
-    agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=0.8, lmbda=0.9,
+    agent = sarsa_lambda(epsilon=0.01, alpha=0.001, gamma=0.9, lmbda=0.9,
     params={'name':'fourier', 'order':4})
 
     # Wrap the environment with the option's pseudo-reward
-    environment = options.TrajectoryRecorder(options.PseudoRewardEnvironment(PinballRLGlue(environment_name), option, 10000), 'trajectory-option-%d'%(option.label,))
+    environment = options.TrajectoryRecorder(options.PseudoRewardEnvironment(PinballRLGlue(environment_name), option, 10000), prefix + '-trajectory')
 
     # Connect to RL-Glue
     rlglue = RLGlueLocal.LocalGlue(environment, agent)
@@ -61,26 +51,22 @@ def learn_option(option, environment_name, num_episodes, max_steps):
         rlglue.RL_env_message('set-start-state %f %f %f %f'
                %(initial_state[0], initial_state[1], initial_state[2], initial_state[3]))
 
-        logger.info("Set initial random state at %f %f %f %f"
-               %(initial_state[0], initial_state[1], initial_state[2], initial_state[3]))
-
-        logger.info("Starting episode %d of %d"%(i, num_episodes))
         terminated = rlglue.RL_episode(max_steps)
 
         total_steps = rlglue.RL_num_steps()
         total_reward = rlglue.RL_return()
-        logger.info("%d steps, %d reward, %d terminated"%(total_steps, total_reward, terminated))
 
         with open(prefix + '-score.csv', 'a') as f:
             writer = csv.writer(f)
             writer.writerow([i, total_steps, total_reward, terminated])
 
     rlglue.RL_cleanup()
-    logger.info("Learning terminated")
 
     # Save function approximation
     option.basis = agent.basis
     option.weights = agent.weights[0,:,:]
+
+    cPickle.dump(option, open(prefix + '-policy.pl', 'wb'))
 
     return option
 
@@ -101,7 +87,7 @@ if __name__ == "__main__":
         args.prefix = os.path.splitext(os.path.basename(args.options))[0]
 
     # Launch pp server with autodiscovery
-    job_server = pp.Server(ppservers=("*",))
+    job_server = pp.Server(ppservers=("*",), ncpus=0, socket_timeout=None)
 
     print 'Submitting jobs...'
     jobs = [job_server.submit(learn_option, (option, args.environment, args.nepisodes, args.max_steps))

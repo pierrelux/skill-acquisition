@@ -247,6 +247,56 @@ class LogisticOption(Option):
         """
         return np.dot(self.weights.T, self.basis.computeFeatures(observation)).argmax()
 
+class NavigationOption(KNNOption):
+    """ K-Nearest Neighbor Option
+
+    Here we implement an option construction based on the community structures
+    of a graph over continuous observations. A k-nearest neighbor index is used
+    to control the initiation and termination conditions.
+
+    More details can be found in:
+
+    P. Bacon and D. Precup. "Using label propagation for learning
+    temporally abstract actions in reinforcement learning." In Proceedings of
+    the Workshop on Multiagent Interaction Networks (MAIN 2013), 2013.
+
+    """
+    def __init__(self, source, target, membership, index_filename, dataset_filename, nn=1):
+        """ Create an option to reach a particular target region
+
+        :param source: The community label over which this option is defined
+        :type source: int
+        :param target: The target label associated with the community to reach
+        :type target: int
+        :param nn: The number of nearest neighbor for majority voting
+        :type nn: int
+        :param membership: The membership vector over all the vertices
+
+        """
+        self.target = target
+        KNNOption.__init__(self, source, membership, index_filename, dataset_filename, nn)
+
+    def terminate(self, observation):
+        """ Termination (beta) function
+
+        The definition of beta that we adopt here makes it either 0 or 1.
+        It returns 1 whenever its closest neighbors belongs to a different community.
+
+        :param observation: the current observation
+        :returns: True if this option must terminate in the current observation
+        :rtype: bool
+
+        """
+        knn_idx, dists = self.index.nn_index(observation, num_neighbors=self.nn)
+        mode_label = mode(self.membership[knn_idx[0]])
+        mode_freq = mode_label[1][0]
+        mode_label = mode_label[0][0]
+
+        return mode_label == self.target and mode_freq >= (self.nn/2)
+
+    def __str__(self):
+        return 'NavigationOption, from %d to %d, nn %d'%(self.label, self.target, self.nn)
+
 class IntraOptionLearning(Agent):
     """ This class implements Intra-Option learning with
     linear function approximation.

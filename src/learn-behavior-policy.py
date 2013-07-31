@@ -35,6 +35,7 @@ def learn_policy(options_learned, environment_name, nepisodes, max_steps, prefix
         with open(prefix + '-behavior-policy.csv', 'a') as f:
             writer = csv.writer(f)
             writer.writerow(score)
+            f.flush()
 
     rlglue.RL_cleanup()
 
