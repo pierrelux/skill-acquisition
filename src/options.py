@@ -333,13 +333,13 @@ class IntraOptionLearning(Agent):
             current_value = 0.0
             if self.options[i].terminate(observation):
                 initializable_options = self.initializable_options(observation)
-                current_value = np.dot(self.weights[:,initializable_options].T, features).argmax()
+                current_value = np.dot(self.weights[:,initializable_options].T, features).max()
             else:
                 current_value = np.dot(self.weights[:,i].T, features)
 
             delta = reward + self.gamma*current_value - np.dot(self.weights[:,i].T, self.last_features)
 
-            self.weights[:,i] = self.weights[:,i] + self.alpha*delta*self.last_features
+            self.weights[:,i] += self.alpha*delta
 
     def consistent_options(self, observation, action):
         """
@@ -372,7 +372,6 @@ class IntraOptionLearning(Agent):
         initializable_options = self.initializable_options(observation)
 
         if not self.finished_learning and (random.random() < self.epsilon):
-            print '************ Random option'
             return random.choice(initializable_options)
 
         return initializable_options[np.dot(self.weights[:,initializable_options].T, features).argmax()]
@@ -389,7 +388,6 @@ class IntraOptionLearning(Agent):
         """
         if self.current_option == None or self.current_option.terminate(observation):
             self.current_option = self.options[self.egreedy(observation, features)]
-            print 'Changing option ', self.current_option
 
         return self.current_option
 
@@ -435,7 +433,6 @@ class IntraOptionLearning(Agent):
         self.last_observation = observation
         self.last_features = current_features
         self.last_action = self.mu(observation, current_features).pi(observation)
-        print self.last_action
 
         action = Action()
         action.intArray = [self.last_action]
@@ -464,7 +461,6 @@ class IntraOptionLearning(Agent):
         self.last_observation = observation
         self.last_features = current_features
         self.last_action = self.mu(observation, current_features).pi(observation)
-        print self.last_action
 
         action = Action()
         action.intArray = [self.last_action]
@@ -482,7 +478,7 @@ class IntraOptionLearning(Agent):
         if not self.finished_learning:
             for i in self.consistent_options(self.last_observation, self.last_action):
                 delta = reward - np.dot(self.weights[:,i].T, self.last_features)
-                self.weights[:,i] = self.weights[:,i] + self.alpha*delta*self.last_features
+                self.weights[:,i] = self.weights[:,i] + self.alpha*delta
 
     def agent_cleanup(self):
         pass
